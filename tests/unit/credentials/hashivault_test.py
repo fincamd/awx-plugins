@@ -393,3 +393,23 @@ def test_non_oidc_plugins_have_no_internal_fields(
         field for field in plugin.inputs['fields'] if field.get('internal')
     ]
     assert internal_fields == []
+
+
+def test_revoke_token_simple(mocker: MockerFixture) -> None:
+    """Test ``revoke_token()`` hits the correct endpoint, with all network calls mocked."""
+    mock_session = mocker.MagicMock()
+    mock_session.headers = {}
+    mock_post = mocker.MagicMock()
+    mock_session.post = mock_post
+    mocker.patch('requests.Session', return_value=mock_session)
+    mocker.patch.object(hashivault, 'CertFiles', return_value=mocker.MagicMock())
+
+    kwargs = {
+        'url': 'https://vault.example.com',
+    }
+
+    hashivault.revoke_token('test_token', **kwargs)  # type: ignore[no-untyped-call]
+
+    assert mock_session.headers['X-Vault-Token'] == 'test_token'
+    mock_post.assert_called_once()
+    assert 'auth/token/revoke-self' in mock_post.call_args[0][0]

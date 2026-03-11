@@ -4,6 +4,7 @@
 import os
 import pathlib
 import time
+from os.path import join
 from urllib.parse import urljoin
 
 from awx_plugins.interfaces._temporary_private_django_api import (  # noqa: WPS436
@@ -481,6 +482,48 @@ def workload_identity_auth(**kwargs):
     return {'role': kwargs.get('jwt_role'), 'jwt': workload_identity_token}
 
 
+def revoke_token(token, **kwargs):
+    """
+    Revoke a Vault token using the token revoke-self endpoint.
+
+    This minimizes the lifetime of tokens obtained through JWT authentication,
+    improving the security posture by ensuring tokens are only valid for the
+    duration of the credential operation.
+
+    Args:
+        token: The Vault client token to revoke
+        **kwargs: Additional arguments (url, cacert, namespace)
+
+    Returns:
+        None. Revocation is best-effort and exceptions are suppressed to avoid
+        failing the overall credential operation.
+    """
+    if not token:
+        return
+
+    try:
+        url = join(kwargs['url'], 'v1')
+        cacert = kwargs.get('cacert')
+
+        request_kwargs = {'timeout': 10}
+
+        sess = requests.Session()
+        sess.mount(url, requests.adapters.HTTPAdapter(max_retries=3))
+        sess.headers['X-Vault-Token'] = token
+        if kwargs.get('namespace'):
+            sess.headers['X-Vault-Namespace'] = kwargs['namespace']
+
+        request_url = join(url, 'auth/token/revoke-self')
+
+        with CertFiles(cacert) as cert:
+            request_kwargs['verify'] = cert
+            sess.post(request_url, **request_kwargs)
+        # Best effort - don't check response status as token may already be
+        # expired/revoked, which is acceptable
+    except Exception:
+        pass
+
+
 def method_auth(**kwargs):
     # get auth method specific params
     request_kwargs = {'json': kwargs['auth_param'], 'timeout': 30}
@@ -523,126 +566,144 @@ def method_auth(**kwargs):
 
 
 def kv_backend(**kwargs):
-    token = handle_auth(**kwargs)
-    url = kwargs['url']
-    secret_path = kwargs['secret_path']
-    secret_backend = kwargs.get('secret_backend')
-    secret_key = kwargs.get('secret_key')
-    cacert = kwargs.get('cacert')
-    api_version = kwargs['api_version']
+    try:
+        token = handle_auth(**kwargs)
 
-    request_kwargs = {
-        'timeout': 30,
-        'allow_redirects': False,
-    }
+        url = kwargs['url']
+        secret_path = kwargs['secret_path']
+        secret_backend = kwargs.get('secret_backend')
+        secret_key = kwargs.get('secret_key')
+        cacert = kwargs.get('cacert')
+        api_version = kwargs['api_version']
 
-    sess = requests.Session()
-    sess.mount(url, requests.adapters.HTTPAdapter(max_retries=5))
-    sess.headers['Authorization'] = f'Bearer {token}'
-    # Compatibility header for older installs of Hashicorp Vault
-    sess.headers['X-Vault-Token'] = token
-    if kwargs.get('namespace'):
-        sess.headers['X-Vault-Namespace'] = kwargs['namespace']
+        request_kwargs = {
+            'timeout': 30,
+            'allow_redirects': False,
+        }
 
-    if api_version == 'v2':
-        if kwargs.get('secret_version'):
-            request_kwargs['params'] = {  # type: ignore[assignment]  # FIXME
-                'version': kwargs['secret_version'],
-            }
-        if secret_backend:
-            path_segments = [secret_backend, 'data', secret_path]
-        else:
-            try:
-                mount_point, *path = pathlib.Path(
-                    secret_path.lstrip(os.sep),
-                ).parts
-                '/'.join(path)
-            except Exception:
-                mount_point, path = secret_path, []
-            # https://www.vaultproject.io/api/secret/kv/kv-v2.html#read-secret-version
-            path_segments = [mount_point, 'data'] + path
-    elif secret_backend:
-        path_segments = [secret_backend, secret_path]
-    else:
-        path_segments = [secret_path]
+        sess = requests.Session()
+        sess.mount(url, requests.adapters.HTTPAdapter(max_retries=5))
+        sess.headers['Authorization'] = f'Bearer {token}'
+        # Compatibility header for older installs of Hashicorp Vault
+        sess.headers['X-Vault-Token'] = token
+        if kwargs.get('namespace'):
+            sess.headers['X-Vault-Namespace'] = kwargs['namespace']
 
-    request_url = urljoin(url, '/'.join(['v1'] + path_segments)).rstrip('/')
-    with CertFiles(cacert) as cert:
-        request_kwargs['verify'] = cert
-        request_retries = 0
-        while request_retries < 5:
-            response = sess.get(request_url, **request_kwargs)
-            # https://developer.hashicorp.com/vault/docs/enterprise/consistency
-            if response.status_code == 412:
-                request_retries += 1
-                time.sleep(1)
+        if api_version == 'v2':
+            if kwargs.get('secret_version'):
+                request_kwargs['params'] = {  # type: ignore[assignment]  # FIXME
+                    'version': kwargs['secret_version'],
+                }
+            if secret_backend:
+                path_segments = [secret_backend, 'data', secret_path]
             else:
-                break
-    raise_for_status(response)
+                try:
+                    mount_point, *path = pathlib.Path(
+                        secret_path.lstrip(os.sep),
+                    ).parts
+                    '/'.join(path)
+                except Exception:
+                    mount_point, path = secret_path, []
+                # https://www.vaultproject.io/api/secret/kv/kv-v2.html#read-secret-version
+                path_segments = [mount_point, 'data'] + path
+        elif secret_backend:
+            path_segments = [secret_backend, secret_path]
+        else:
+            path_segments = [secret_path]
 
-    json = response.json()
-    if api_version == 'v2':
-        json = json['data']
+        request_url = urljoin(url, '/'.join(['v1'] + path_segments)).rstrip(
+            '/',
+        )
+        with CertFiles(cacert) as cert:
+            request_kwargs['verify'] = cert
+            request_retries = 0
+            while request_retries < 5:
+                response = sess.get(request_url, **request_kwargs)
+                # https://developer.hashicorp.com/vault/docs/enterprise/consistency
+                if response.status_code == 412:
+                    request_retries += 1
+                    time.sleep(1)
+                else:
+                    break
+        raise_for_status(response)
 
-    if secret_key:
-        try:
-            if (
-                (secret_key != 'data')
-                and (  # noqa: S105; not a password
-                    secret_key not in json['data']
+        json = response.json()
+        if api_version == 'v2':
+            json = json['data']
+
+        if secret_key:
+            try:
+                if (
+                    (secret_key != 'data')
+                    and (  # noqa: S105; not a password
+                        secret_key not in json['data']
+                    )
+                    and ('data' in json['data'])
+                ):
+                    return json['data']['data'][secret_key]
+                return json['data'][secret_key]
+            except KeyError:
+                raise RuntimeError(
+                    f'{secret_key} is not present at {secret_path}',
                 )
-                and ('data' in json['data'])
-            ):
-                return json['data']['data'][secret_key]
-            return json['data'][secret_key]
-        except KeyError:
-            raise RuntimeError(f'{secret_key} is not present at {secret_path}')
-    return json['data']
+        return json['data']
+    finally:
+        # Only revoke ephemeral vault tokens
+        if 'workload_identity_token' in kwargs:
+            # Revoke token to minimize token lifetime and improve security posture
+            revoke_token(token, **kwargs)
 
 
 def ssh_backend(**kwargs):
-    token = handle_auth(**kwargs)
-    url = urljoin(kwargs['url'], 'v1')
-    secret_path = kwargs['secret_path']
-    role = kwargs['role']
-    cacert = kwargs.get('cacert')
+    try:
+        token = handle_auth(**kwargs)
+        
+        url = urljoin(kwargs['url'], 'v1')
+        secret_path = kwargs['secret_path']
+        role = kwargs['role']
+        cacert = kwargs.get('cacert')
 
-    request_kwargs = {
-        'timeout': 30,
-        'allow_redirects': False,
-    }
+        request_kwargs = {
+            'timeout': 30,
+            'allow_redirects': False,
+        }
 
-    request_kwargs['json'] = {  # type: ignore[assignment]  # FIXME
-        'public_key': kwargs['public_key'],
-    }
-    if kwargs.get('valid_principals'):
-        request_kwargs['json'][  # type: ignore[index]  # FIXME
-            'valid_principals'
-        ] = kwargs['valid_principals']
+        request_kwargs['json'] = {  # type: ignore[assignment]  # FIXME
+            'public_key': kwargs['public_key'],
+        }
+        if kwargs.get('valid_principals'):
+            request_kwargs['json'][  # type: ignore[index]  # FIXME
+                'valid_principals'
+            ] = kwargs['valid_principals']
 
-    sess = requests.Session()
-    sess.mount(url, requests.adapters.HTTPAdapter(max_retries=5))
-    sess.headers['Authorization'] = f'Bearer {token}'
-    if kwargs.get('namespace'):
-        sess.headers['X-Vault-Namespace'] = kwargs['namespace']
-    # Compatibility header for older installs of Hashicorp Vault
-    sess.headers['X-Vault-Token'] = token
-    # https://www.vaultproject.io/api/secret/ssh/index.html#sign-ssh-key
-    request_url = '/'.join([url, secret_path, 'sign', role]).rstrip('/')
+        sess = requests.Session()
+        sess.mount(url, requests.adapters.HTTPAdapter(max_retries=5))
+        sess.headers['Authorization'] = f'Bearer {token}'
+        if kwargs.get('namespace'):
+            sess.headers['X-Vault-Namespace'] = kwargs['namespace']
+        # Compatibility header for older installs of Hashicorp Vault
+        sess.headers['X-Vault-Token'] = token
+        # https://www.vaultproject.io/api/secret/ssh/index.html#sign-ssh-key
+        request_url = '/'.join([url, secret_path, 'sign', role]).rstrip('/')
 
-    with CertFiles(cacert) as cert:
-        request_kwargs['verify'] = cert
-        request_retries = 0
-        while request_retries < 5:
-            resp = sess.post(request_url, **request_kwargs)
-            # https://developer.hashicorp.com/vault/docs/enterprise/consistency
-            if resp.status_code == 412:
-                request_retries += 1
-                time.sleep(1)
-            else:
-                break
-    raise_for_status(resp)
-    return resp.json()['data']['signed_key']
+        with CertFiles(cacert) as cert:
+            request_kwargs['verify'] = cert
+            request_retries = 0
+            while request_retries < 5:
+                resp = sess.post(request_url, **request_kwargs)
+                # https://developer.hashicorp.com/vault/docs/enterprise/consistency
+                if resp.status_code == 412:
+                    request_retries += 1
+                    time.sleep(1)
+                else:
+                    break
+        raise_for_status(resp)
+        return resp.json()['data']['signed_key']
+    finally:
+        # Only revoke ephemeral vault tokens
+        if 'workload_identity_token' in kwargs:
+            # Revoke token to minimize token lifetime and improve security posture
+            revoke_token(token, **kwargs)
 
 
 hashivault_kv_plugin = CredentialPlugin(
