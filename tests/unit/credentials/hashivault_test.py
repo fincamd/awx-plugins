@@ -512,7 +512,20 @@ def test_revoke_token_handles_exceptions(mocker: MockerFixture) -> None:
                 'api_version': 'v1',
                 'secret_key': 'password',
             },
-            id='kv-backend',
+            id='kv-backend-v1',
+        ),
+        pytest.param(
+            'kv_backend',
+            {
+                'url': 'https://vault.example.com',
+                'workload_identity_token': 'jwt_token',
+                'jwt_role': 'test_role',
+                'default_auth_path': 'jwt',
+                'secret_path': '/secret/path',
+                'api_version': 'v2',
+                'secret_key': 'password',
+            },
+            id='kv-backend-v2',
         ),
         pytest.param(
             'ssh_backend',
