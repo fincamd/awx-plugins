@@ -433,7 +433,10 @@ def test_revoke_token_with_empty_token(
         ),
         pytest.param(
             {'namespace': 'test-namespace'},
-            {'X-Vault-Token': 'test_token', 'X-Vault-Namespace': 'test-namespace'},
+            {
+                'X-Vault-Token': 'test_token',
+                'X-Vault-Namespace': 'test-namespace',
+            },
             id='with-namespace',
         ),
     ),

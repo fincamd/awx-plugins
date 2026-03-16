@@ -4,18 +4,19 @@
 import os
 import pathlib
 import time
+from logging import getLogger
 from os.path import join
 from urllib.parse import urljoin
-
-from logging import getLogger
 
 from awx_plugins.interfaces._temporary_private_django_api import (  # noqa: WPS436
     gettext_noop as _,
 )
 
 import requests
+
 from . import _types
 from .plugin import CertFiles, CredentialPlugin, raise_for_status
+
 
 logger = getLogger(__name__)
 
