@@ -554,7 +554,7 @@ def method_auth(**kwargs):
     return token
 
 
-def kv_backend(**kwargs):
+def kv_backend(**kwargs):  # noqa: PLR0915
     try:
         token = handle_auth(**kwargs)
 
@@ -624,7 +624,7 @@ def kv_backend(**kwargs):
             try:
                 if (
                     (secret_key != 'data')
-                    and (  # noqa: S105; not a password
+                    and (  # noqa: S105
                         secret_key not in json['data']
                     )
                     and ('data' in json['data'])

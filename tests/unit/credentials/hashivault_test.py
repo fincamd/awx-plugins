@@ -1,5 +1,6 @@
 """Tests for HashiCorp Vault credential plugins."""
 
+import contextlib
 import typing as _t
 
 import pytest
@@ -396,15 +397,16 @@ def test_non_oidc_plugins_have_no_internal_fields(
 
 
 @pytest.mark.parametrize(
-    ('token', 'should_call_post'),
+    ('should_call_post', 'token'),
     (
-        pytest.param(None, False, id='none-token'),
-        pytest.param('', False, id='empty-token'),
+        pytest.param(False, None, id='none-token'),
+        pytest.param(False, '', id='empty-token'),
     ),
 )
 def test_revoke_token_with_empty_token(
     mocker: MockerFixture,
     token: str | None,
+    *,
     should_call_post: bool,
 ) -> None:
     """Test ``revoke_token()`` returns early when token is empty."""
@@ -415,7 +417,7 @@ def test_revoke_token_with_empty_token(
         'url': 'https://vault.example.com',
     }
 
-    hashivault.revoke_token(token, **kwargs)  # type: ignore[no-untyped-call,arg-type]
+    hashivault.revoke_token(token, **kwargs)
 
     if should_call_post:
         mock_session.post.assert_called_once()
@@ -463,7 +465,7 @@ def test_revoke_token_success(
         **extra_kwargs,
     }
 
-    hashivault.revoke_token('test_token', **kwargs)  # type: ignore[no-untyped-call]
+    hashivault.revoke_token('test_token', **kwargs)
 
     for header, value in expected_headers.items():
         assert mock_session.headers[header] == value
@@ -489,7 +491,7 @@ def test_revoke_token_handles_exceptions(mocker: MockerFixture) -> None:
     }
 
     # Should not raise exception
-    hashivault.revoke_token('test_token', **kwargs)  # type: ignore[no-untyped-call]
+    hashivault.revoke_token('test_token', **kwargs)
 
     mock_logger.warning.assert_called_once_with(
         'Failed to revoke ephemeral Vault token',
@@ -545,10 +547,8 @@ def test_backend_revokes_oidc_token(
 
     backend = getattr(hashivault, backend_func)
 
-    try:
-        backend(**backend_kwargs)  # type: ignore[no-untyped-call]
-    except Exception:
-        pass  # We don't care if it fails, we just want to ensure revoke is called
+    with contextlib.suppress(Exception):
+        backend(**backend_kwargs)
 
     mock_handle_auth.assert_called_once()
     mock_revoke.assert_called_once_with('test_token', **backend_kwargs)
