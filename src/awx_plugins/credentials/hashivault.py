@@ -482,22 +482,8 @@ def workload_identity_auth(**kwargs):
     return {'role': kwargs.get('jwt_role'), 'jwt': workload_identity_token}
 
 
-def revoke_token(token, **kwargs):
-    """
-    Revoke a Vault token using the token revoke-self endpoint.
-
-    This minimizes the lifetime of tokens obtained through JWT authentication,
-    improving the security posture by ensuring tokens are only valid for the
-    duration of the credential operation.
-
-    Args:
-        token: The Vault client token to revoke
-        **kwargs: Additional arguments (url, cacert, namespace)
-
-    Returns:
-        None. Revocation is best-effort and exceptions are suppressed to avoid
-        failing the overall credential operation.
-    """
+def revoke_token(token: str, **kwargs):
+    """Revoke a Vault token using the token revoke-self endpoint."""
     if not token:
         return
 
