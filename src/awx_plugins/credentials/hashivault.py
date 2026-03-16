@@ -657,7 +657,7 @@ def kv_backend(**kwargs):
 def ssh_backend(**kwargs):
     try:
         token = handle_auth(**kwargs)
-        
+
         url = urljoin(kwargs['url'], 'v1')
         secret_path = kwargs['secret_path']
         role = kwargs['role']

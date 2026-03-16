@@ -402,7 +402,11 @@ def test_revoke_token_simple(mocker: MockerFixture) -> None:
     mock_post = mocker.MagicMock()
     mock_session.post = mock_post
     mocker.patch('requests.Session', return_value=mock_session)
-    mocker.patch.object(hashivault, 'CertFiles', return_value=mocker.MagicMock())
+    mocker.patch.object(
+        hashivault,
+        'CertFiles',
+        return_value=mocker.MagicMock(),
+    )
 
     kwargs = {
         'url': 'https://vault.example.com',
