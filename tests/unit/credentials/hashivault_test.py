@@ -395,31 +395,18 @@ def test_non_oidc_plugins_have_no_internal_fields(
     assert internal_fields == []
 
 
-def test_revoke_token_simple(mocker: MockerFixture) -> None:
-    """Test ``revoke_token()`` hits the correct endpoint, with all network calls mocked."""
-    mock_session = mocker.MagicMock()
-    mock_session.headers = {}
-    mock_post = mocker.MagicMock()
-    mock_session.post = mock_post
-    mocker.patch('requests.Session', return_value=mock_session)
-    mocker.patch.object(
-        hashivault,
-        'CertFiles',
-        return_value=mocker.MagicMock(),
-    )
-
-    kwargs = {
-        'url': 'https://vault.example.com',
-    }
-
-    hashivault.revoke_token('test_token', **kwargs)  # type: ignore[no-untyped-call]
-
-    assert mock_session.headers['X-Vault-Token'] == 'test_token'
-    mock_post.assert_called_once()
-    assert 'auth/token/revoke-self' in mock_post.call_args[0][0]
-
-
-def test_revoke_token_with_empty_token(mocker: MockerFixture) -> None:
+@pytest.mark.parametrize(
+    ('token', 'should_call_post'),
+    (
+        pytest.param(None, False, id='none-token'),
+        pytest.param('', False, id='empty-token'),
+    ),
+)
+def test_revoke_token_with_empty_token(
+    mocker: MockerFixture,
+    token: str | None,
+    should_call_post: bool,
+) -> None:
     """Test ``revoke_token()`` returns early when token is empty."""
     mock_session = mocker.MagicMock()
     mocker.patch('requests.Session', return_value=mock_session)
@@ -428,17 +415,35 @@ def test_revoke_token_with_empty_token(mocker: MockerFixture) -> None:
         'url': 'https://vault.example.com',
     }
 
-    # Test with None
-    hashivault.revoke_token(None, **kwargs)  # type: ignore[no-untyped-call,arg-type]
-    mock_session.post.assert_not_called()
+    hashivault.revoke_token(token, **kwargs)  # type: ignore[no-untyped-call,arg-type]
 
-    # Test with empty string
-    hashivault.revoke_token('', **kwargs)  # type: ignore[no-untyped-call]
-    mock_session.post.assert_not_called()
+    if should_call_post:
+        mock_session.post.assert_called_once()
+    else:
+        mock_session.post.assert_not_called()
 
 
-def test_revoke_token_with_namespace(mocker: MockerFixture) -> None:
-    """Test ``revoke_token()`` includes namespace header when provided."""
+@pytest.mark.parametrize(
+    ('extra_kwargs', 'expected_headers'),
+    (
+        pytest.param(
+            {},
+            {'X-Vault-Token': 'test_token'},
+            id='without-namespace',
+        ),
+        pytest.param(
+            {'namespace': 'test-namespace'},
+            {'X-Vault-Token': 'test_token', 'X-Vault-Namespace': 'test-namespace'},
+            id='with-namespace',
+        ),
+    ),
+)
+def test_revoke_token_success(
+    mocker: MockerFixture,
+    extra_kwargs: dict[str, str],
+    expected_headers: dict[str, str],
+) -> None:
+    """Test ``revoke_token()`` hits the correct endpoint and sets appropriate headers."""
     mock_session = mocker.MagicMock()
     mock_session.headers = {}
     mock_post = mocker.MagicMock()
@@ -452,14 +457,15 @@ def test_revoke_token_with_namespace(mocker: MockerFixture) -> None:
 
     kwargs = {
         'url': 'https://vault.example.com',
-        'namespace': 'test-namespace',
+        **extra_kwargs,
     }
 
     hashivault.revoke_token('test_token', **kwargs)  # type: ignore[no-untyped-call]
 
-    assert mock_session.headers['X-Vault-Token'] == 'test_token'
-    assert mock_session.headers['X-Vault-Namespace'] == 'test-namespace'
+    for header, value in expected_headers.items():
+        assert mock_session.headers[header] == value
     mock_post.assert_called_once()
+    assert 'auth/token/revoke-self' in mock_post.call_args[0][0]
 
 
 def test_revoke_token_handles_exceptions(mocker: MockerFixture) -> None:
@@ -487,8 +493,43 @@ def test_revoke_token_handles_exceptions(mocker: MockerFixture) -> None:
     )
 
 
-def test_kv_backend_revokes_oidc_token(mocker: MockerFixture) -> None:
-    """Test ``kv_backend()`` revokes token in finally block for OIDC auth."""
+@pytest.mark.parametrize(
+    ('backend_func', 'backend_kwargs'),
+    (
+        pytest.param(
+            'kv_backend',
+            {
+                'url': 'https://vault.example.com',
+                'workload_identity_token': 'jwt_token',
+                'jwt_role': 'test_role',
+                'default_auth_path': 'jwt',
+                'secret_path': '/secret/path',
+                'api_version': 'v1',
+                'secret_key': 'password',
+            },
+            id='kv-backend',
+        ),
+        pytest.param(
+            'ssh_backend',
+            {
+                'url': 'https://vault.example.com',
+                'workload_identity_token': 'jwt_token',
+                'jwt_role': 'test_role',
+                'default_auth_path': 'jwt',
+                'secret_path': '/ssh',
+                'role': 'test_ssh_role',
+                'public_key': 'ssh-rsa AAAAB...',
+            },
+            id='ssh-backend',
+        ),
+    ),
+)
+def test_backend_revokes_oidc_token(
+    mocker: MockerFixture,
+    backend_func: str,
+    backend_kwargs: dict[str, str],
+) -> None:
+    """Test backend functions revoke token in finally block for OIDC auth."""
     mock_handle_auth = mocker.patch.object(
         hashivault,
         'handle_auth',
@@ -499,51 +540,12 @@ def test_kv_backend_revokes_oidc_token(mocker: MockerFixture) -> None:
     mocker.patch.object(hashivault, 'CertFiles')
     mocker.patch.object(hashivault, 'raise_for_status')
 
-    kwargs = {
-        'url': 'https://vault.example.com',
-        'workload_identity_token': 'jwt_token',
-        'jwt_role': 'test_role',
-        'default_auth_path': 'jwt',
-        'secret_path': '/secret/path',
-        'api_version': 'v1',
-        'secret_key': 'password',
-    }
+    backend = getattr(hashivault, backend_func)
 
     try:
-        hashivault.kv_backend(**kwargs)  # type: ignore[no-untyped-call]
+        backend(**backend_kwargs)  # type: ignore[no-untyped-call]
     except Exception:
         pass  # We don't care if it fails, we just want to ensure revoke is called
 
     mock_handle_auth.assert_called_once()
-    mock_revoke.assert_called_once_with('test_token', **kwargs)
-
-
-def test_ssh_backend_revokes_oidc_token(mocker: MockerFixture) -> None:
-    """Test ``ssh_backend()`` revokes token in finally block for OIDC auth."""
-    mock_handle_auth = mocker.patch.object(
-        hashivault,
-        'handle_auth',
-        return_value='test_token',
-    )
-    mock_revoke = mocker.patch.object(hashivault, 'revoke_token')
-    mocker.patch('requests.Session')
-    mocker.patch.object(hashivault, 'CertFiles')
-    mocker.patch.object(hashivault, 'raise_for_status')
-
-    kwargs = {
-        'url': 'https://vault.example.com',
-        'workload_identity_token': 'jwt_token',
-        'jwt_role': 'test_role',
-        'default_auth_path': 'jwt',
-        'secret_path': '/ssh',
-        'role': 'test_ssh_role',
-        'public_key': 'ssh-rsa AAAAB...',
-    }
-
-    try:
-        hashivault.ssh_backend(**kwargs)  # type: ignore[no-untyped-call]
-    except Exception:
-        pass  # We don't care if it fails, we just want to ensure revoke is called
-
-    mock_handle_auth.assert_called_once()
-    mock_revoke.assert_called_once_with('test_token', **kwargs)
+    mock_revoke.assert_called_once_with('test_token', **backend_kwargs)
