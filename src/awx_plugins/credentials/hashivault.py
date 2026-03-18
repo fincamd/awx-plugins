@@ -518,12 +518,7 @@ def _handle_vault_token_revokation(**kwargs) -> str:
         yield auth_token
     finally:
         if is_oidc_auth:
-            _revoke_token(
-                token=auth_token,
-                url=kwargs['url'],
-                cacert=kwargs['cacert'],
-                namespace=kwargs['namespace'],
-            )
+            _revoke_token(**kwargs, token=auth_token)
             raise Exception(f"token {auth_token} revoked")
 
 
