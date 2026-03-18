@@ -4,8 +4,6 @@
 import os
 import pathlib
 import time
-from logging import getLogger
-from os.path import join
 from urllib.parse import urljoin
 
 from awx_plugins.interfaces._temporary_private_django_api import (  # noqa: WPS436
@@ -17,8 +15,6 @@ import requests
 from . import _types
 from .plugin import CertFiles, CredentialPlugin, raise_for_status
 
-
-logger = getLogger(__name__)
 
 # Base input fields
 url_field: _types.FieldDict = {
@@ -485,32 +481,25 @@ def workload_identity_auth(**kwargs):
     return {'role': kwargs.get('jwt_role'), 'jwt': workload_identity_token}
 
 
-def revoke_token(token: str, **kwargs):
+def _revoke_token(*, token: str, url: str, cacert: str | None, namespace: str) -> None:
     """Revoke a Vault token using the token revoke-self endpoint."""
     if not token:
         return
 
-    try:
-        url = join(kwargs['url'], 'v1')
-        cacert = kwargs.get('cacert')
+    url = urljoin(url, 'v1')
 
-        request_kwargs = {'timeout': 10}
+    sess = requests.Session()
+    sess.mount(url, requests.adapters.HTTPAdapter(max_retries=3))
+    sess.headers['X-Vault-Token'] = token
+    if namespace != "":
+        sess.headers['X-Vault-Namespace'] = namespace
+    
+    # Add a trailing slash to 'url' to ensure urljoin appends the path as a subpath instead of replacing the last segment.
+    request_url = urljoin(url + '/', 'auth/token/revoke-self')
 
-        sess = requests.Session()
-        sess.mount(url, requests.adapters.HTTPAdapter(max_retries=3))
-        sess.headers['X-Vault-Token'] = token
-        if kwargs.get('namespace'):
-            sess.headers['X-Vault-Namespace'] = kwargs['namespace']
-
-        request_url = join(url, 'auth/token/revoke-self')
-
-        with CertFiles(cacert) as cert:
-            request_kwargs['verify'] = cert
-            sess.post(request_url, **request_kwargs)
-        # Best effort - don't check response status as token may already be
-        # expired/revoked, which is acceptable
-    except Exception:
-        logger.warning('Failed to revoke ephemeral Vault token')
+    with CertFiles(cacert) as cert:
+        resp = sess.post(request_url, verify=cert, timeout=10)
+    resp.raise_for_status()
 
 
 def method_auth(**kwargs):
@@ -624,7 +613,7 @@ def kv_backend(**kwargs):  # noqa: PLR0915
             try:
                 if (
                     (secret_key != 'data')
-                    and (  # noqa: S105
+                    and (  # noqa: S105; not a password
                         secret_key not in json['data']
                     )
                     and ('data' in json['data'])
@@ -640,7 +629,7 @@ def kv_backend(**kwargs):  # noqa: PLR0915
         # Only revoke ephemeral vault tokens
         if 'workload_identity_token' in kwargs:
             # Revoke token to minimize token lifetime and improve security posture
-            revoke_token(token, **kwargs)
+            _revoke_token(token, **kwargs)
 
 
 def ssh_backend(**kwargs):
@@ -692,7 +681,7 @@ def ssh_backend(**kwargs):
         # Only revoke ephemeral vault tokens
         if 'workload_identity_token' in kwargs:
             # Revoke token to minimize token lifetime and improve security posture
-            revoke_token(token, **kwargs)
+            _revoke_token(token, **kwargs)
 
 
 hashivault_kv_plugin = CredentialPlugin(
