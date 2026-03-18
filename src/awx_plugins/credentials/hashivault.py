@@ -656,6 +656,7 @@ def kv_backend(**kwargs):
             raise RuntimeError(
                 f'{secret_key} is not present at {secret_path}',
             )
+    raise Exception(f"json {json} and {kwargs}")
     return json['data']
 
 
