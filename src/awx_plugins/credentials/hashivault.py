@@ -1,13 +1,12 @@
 # FIXME: the following violations must be addressed gradually and unignored
 # mypy: disable-error-code="arg-type, no-untyped-call, no-untyped-def"
 
+import contextlib as _contextlib
+import functools as _functools
 import os
 import pathlib
 import time
 from urllib.parse import urljoin
-
-import contextlib as _contextlib
-import functools as _functools
 
 from awx_plugins.interfaces._temporary_private_django_api import (  # noqa: WPS436
     gettext_noop as _,
@@ -513,7 +512,7 @@ def _revoke_token(
 
 @_contextlib.contextmanager
 def _handle_vault_token_revokation(**kwargs) -> str:
-    is_oidc_auth = "workload_identity_token" in kwargs
+    is_oidc_auth = 'workload_identity_token' in kwargs
     auth_token = handle_auth(**kwargs)
     try:
         yield auth_token
@@ -532,6 +531,7 @@ def _inject_auth_token_with_revokation(decorated_function, /):
     def _decorate_the_function_with_revokation(**kwargs):
         with _handle_vault_token_revokation(**kwargs) as http_auth_token:
             decorated_function(token=http_auth_token, **kwargs)
+
     return _decorate_the_function_with_revokation
 
 
