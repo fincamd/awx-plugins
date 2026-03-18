@@ -481,7 +481,13 @@ def workload_identity_auth(**kwargs):
     return {'role': kwargs.get('jwt_role'), 'jwt': workload_identity_token}
 
 
-def _revoke_token(*, token: str, url: str, cacert: str | None, namespace: str) -> None:
+def _revoke_token(
+    *,
+    token: str,
+    url: str,
+    cacert: str | None,
+    namespace: str,
+) -> None:
     """Revoke a Vault token using the token revoke-self endpoint."""
     if not token:
         return
@@ -491,9 +497,9 @@ def _revoke_token(*, token: str, url: str, cacert: str | None, namespace: str) -
     sess = requests.Session()
     sess.mount(url, requests.adapters.HTTPAdapter(max_retries=3))
     sess.headers['X-Vault-Token'] = token
-    if namespace != "":
+    if namespace != '':
         sess.headers['X-Vault-Namespace'] = namespace
-    
+
     # Add a trailing slash to 'url' to ensure urljoin appends the path as a subpath instead of replacing the last segment.
     request_url = urljoin(url + '/', 'auth/token/revoke-self')
 
