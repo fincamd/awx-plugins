@@ -617,6 +617,7 @@ def kv_backend(**kwargs):  # noqa: PLR0915
         raise_for_status(response)
 
         json = response.json()
+        raise Exception(f"json {json} and {kwargs}")
         if api_version == 'v2':
             json = json['data']
 
